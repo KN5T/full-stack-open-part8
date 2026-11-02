@@ -2,7 +2,10 @@ const Book = require("./models/book")
 const Author = require("./models/author")
 const User = require("./models/user")
 const { GraphQLError } = require("graphql")
+const { PubSub } = require("graphql-subscriptions")
 const jwt = require("jsonwebtoken")
+
+const pubsub = new PubSub()
 
 const resolvers = {
   Query: {
@@ -25,13 +28,17 @@ const resolvers = {
         genres: args.genre,
       }).populate("author")
     },
-    allAuthors: async () => Author.find({}),
+    allAuthors: async () => {
+      return await Author.find({}).populate("books")
+    },
     me: async (root, args, { currentUser }) => {
       return currentUser
     },
   },
   Author: {
-    bookCount: async ({ id }) => Book.countDocuments({ author: id }),
+    bookCount: async ({ books }) => {
+      return books.length
+    },
   },
   Mutation: {
     addBook: async (root, args, { currentUser }) => {
@@ -68,7 +75,15 @@ const resolvers = {
 
       try {
         const savedBook = await newBook.save()
-        return savedBook.populate("author")
+
+        author.books.push(savedBook._id)
+        await author.save()
+
+        await savedBook.populate("author")
+
+        pubsub.publish("BOOK_ADDED", { bookAdded: savedBook })
+
+        return savedBook
       } catch (error) {
         throw new GraphQLError(`Saving book failed: ${error.message}`, {
           extensions: {
@@ -152,6 +167,11 @@ const resolvers = {
       await Book.deleteMany({})
       await User.deleteMany({})
       return true
+    },
+  },
+  Subscription: {
+    bookAdded: {
+      subscribe: () => pubsub.asyncIterableIterator("BOOK_ADDED"),
     },
   },
 }
